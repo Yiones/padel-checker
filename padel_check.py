@@ -114,10 +114,20 @@ def main():
     if not results:
         return
 
-    lines = [f"{b['start']:%a %d.%m} {b['start']:%H:%M}-{b['end']:%H:%M} "
-             f"{b['court']} {b['price']}" for b in results]
-    notify("\n".join(lines))
-    print("Notification sent.")
+    lines = []
+    current_day = None
+    for b in results:
+        day = b["start"].date()
+        if day != current_day:
+            if lines:
+                lines.append("")          # blank line between days
+            lines.append(f"{b['start']:%A %d.%m.%Y}")
+            current_day = day
+        lines.append(f"  {b['start']:%H:%M}-{b['end']:%H:%M}  {b['court']}  {b['price']}")
+        lines.append("")                  # blank line between slots
+
+    message = "\n".join(lines).rstrip()
+    notify(f"Free weekday slots 18:00-22:00\n\n{message}")
 
 
 if __name__ == "__main__":
