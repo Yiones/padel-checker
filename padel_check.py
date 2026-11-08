@@ -2,9 +2,7 @@
 """Check Padelbase SALZBURG-INDOOR for free weekday slots 18:00-22:00 and notify via ntfy."""
 
 import datetime as dt
-import json
 import os
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import requests
@@ -19,7 +17,6 @@ WINDOW_START = dt.time(18, 0)
 WINDOW_END = dt.time(22, 0)
 TZ = ZoneInfo("Europe/Vienna")
 HEADERS = {"User-Agent": "Mozilla/5.0"}
-SEEN_FILE = Path("seen_slots.json")
 NTFY_TOPIC = os.environ["NTFY_TOPIC"]
 
 
@@ -75,7 +72,7 @@ def clip_to_window(block, now, horizon):
     start = dt.datetime.fromtimestamp(block["start"], TZ)
     end = dt.datetime.fromtimestamp(block["end"], TZ)
 
-    if start.weekday() >= 5:
+    if start.weekday() >= 5:          # 5 = Saturday, 6 = Sunday
         return None
 
     win_start = dt.datetime.combine(start.date(), WINDOW_START, tzinfo=TZ)
@@ -90,15 +87,12 @@ def clip_to_window(block, now, horizon):
             "start": clipped_start, "end": clipped_end}
 
 
-def slot_key(b):
-    return f"{b['start']:%Y-%m-%d %H:%M}|{b['end']:%H:%M}|{b['court']}"
-
-
 def notify(message):
-    requests.post(f"https://ntfy.sh/{NTFY_TOPIC}",
-                  data=message.encode("utf-8"),
-                  headers={"Title": "Padel slot free"},
-                  timeout=20)
+    r = requests.post(f"https://ntfy.sh/{NTFY_TOPIC}",
+                      data=message.encode("utf-8"),
+                      headers={"Title": "Padel slot free"},
+                      timeout=20)
+    r.raise_for_status()
 
 
 def main():
@@ -114,21 +108,16 @@ def main():
         clipped = clip_to_window(block, now, horizon)
         if clipped:
             results.append(clipped)
+    results.sort(key=lambda b: (b["start"], b["court"]))
 
-    seen = set(json.loads(SEEN_FILE.read_text())) if SEEN_FILE.exists() else set()
-    new = [b for b in results if slot_key(b) not in seen]
+    print(f"Found {len(results)} free weekday slot(s) in 18:00-22:00.")
+    if not results:
+        return
 
-    if new:
-        lines = [f"{b['start']:%a %d.%m} {b['start']:%H:%M}-{b['end']:%H:%M} "
-                 f"{b['court']} {b['price']}" for b in new]
-        notify("\n".join(lines))
-        print(f"Notified about {len(new)} new slot(s).")
-    else:
-        print("No new slots.")
-
-    # Keep only keys still in the future/window, so the file doesn't grow forever
-    current = {slot_key(b) for b in results}
-    SEEN_FILE.write_text(json.dumps(sorted(current), indent=1))
+    lines = [f"{b['start']:%a %d.%m} {b['start']:%H:%M}-{b['end']:%H:%M} "
+             f"{b['court']} {b['price']}" for b in results]
+    notify("\n".join(lines))
+    print("Notification sent.")
 
 
 if __name__ == "__main__":
