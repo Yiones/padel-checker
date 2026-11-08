@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check Padelbase SALZBURG-INDOOR for free weekday slots 18:00-22:00 and notify via ntfy."""
+"""Check Padelbase SALZBURG-INDOOR for weekday free blocks of 1h30 between 06:00-23:00, notify via ntfy."""
 
 import datetime as dt
 import os
@@ -13,8 +13,9 @@ CLUB_ID = 5182
 FIRST_WEEK = 1794200400
 WEEK = 7 * 24 * 3600
 DAYS_AHEAD = 14
-WINDOW_START = dt.time(18, 0)
-WINDOW_END = dt.time(22, 0)
+WINDOW_START = dt.time(6, 0)
+WINDOW_END = dt.time(23, 0)
+MIN_MINUTES = 90
 TZ = ZoneInfo("Europe/Vienna")
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 NTFY_TOPIC = os.environ["NTFY_TOPIC"]
@@ -28,12 +29,6 @@ def fetch_week(week_start):
 
 
 def parse_week(soup):
-    prices = {}
-    for el in soup.select(".pricebox .price"):
-        for cls in el.get("class", []):
-            if cls.startswith("price") and cls != "price":
-                prices[cls] = el.get_text(strip=True)
-
     header = soup.select_one(".day-head .day-courts")
     names = [c.get_text(strip=True) for c in header.select(".court")] if header else []
 
@@ -42,13 +37,10 @@ def parse_week(soup):
         for idx, court in enumerate(body.select(":scope > .court")):
             court_name = names[idx] if idx < len(names) else f"Court {idx + 1}"
             for slot in court.select(".slot.av"):
-                price_cls = next((c for c in slot.get("class", [])
-                                  if c.startswith("price")), None)
                 slots.append({
                     "court": court_name,
                     "start": int(slot["data-begin"]),
                     "minutes": int(slot["data-size"]) * 30,
-                    "price": prices.get(price_cls, "?"),
                 })
     return slots
 
@@ -58,13 +50,10 @@ def merge_blocks(slots):
     blocks = []
     for s in slots:
         end = s["start"] + s["minutes"] * 60
-        if (blocks and blocks[-1]["court"] == s["court"]
-                and blocks[-1]["price"] == s["price"]
-                and blocks[-1]["end"] == s["start"]):
+        if blocks and blocks[-1]["court"] == s["court"] and blocks[-1]["end"] == s["start"]:
             blocks[-1]["end"] = end
         else:
-            blocks.append({"court": s["court"], "price": s["price"],
-                           "start": s["start"], "end": end})
+            blocks.append({"court": s["court"], "start": s["start"], "end": end})
     return blocks
 
 
@@ -80,17 +69,18 @@ def clip_to_window(block, now, horizon):
 
     clipped_start = max(start, win_start, now)
     clipped_end = min(end, win_end)
-    if clipped_end <= clipped_start or clipped_start >= horizon:
+    if clipped_start >= horizon:
+        return None
+    if (clipped_end - clipped_start) < dt.timedelta(minutes=MIN_MINUTES):
         return None
 
-    return {"court": block["court"], "price": block["price"],
-            "start": clipped_start, "end": clipped_end}
+    return {"court": block["court"], "start": clipped_start, "end": clipped_end}
 
 
 def notify(message):
     r = requests.post(f"https://ntfy.sh/{NTFY_TOPIC}",
                       data=message.encode("utf-8"),
-                      headers={"Title": "Padel slot free"},
+                      headers={"Title": "Padel 1h30 free"},
                       timeout=20)
     r.raise_for_status()
 
@@ -110,7 +100,7 @@ def main():
             results.append(clipped)
     results.sort(key=lambda b: (b["start"], b["court"]))
 
-    print(f"Found {len(results)} free weekday slot(s) in 18:00-22:00.")
+    print(f"Found {len(results)} weekday block(s) of 1h30 or more.")
     if not results:
         return
 
@@ -120,14 +110,14 @@ def main():
         day = b["start"].date()
         if day != current_day:
             if lines:
-                lines.append("")          # blank line between days
+                lines.append("")
             lines.append(f"{b['start']:%A %d.%m.%Y}")
             current_day = day
-        lines.append(f"  {b['start']:%H:%M}-{b['end']:%H:%M}  {b['court']}  {b['price']}")
-        lines.append("")                  # blank line between slots
+        lines.append(f"  {b['start']:%H:%M}-{b['end']:%H:%M}  {b['court']}")
+        lines.append("")
 
     message = "\n".join(lines).rstrip()
-    notify(f"Free weekday slots 18:00-22:00\n\n{message}")
+    notify(f"Free 1h30 weekday slots 06:00-23:00\n\n{message}")
 
 
 if __name__ == "__main__":
