@@ -142,30 +142,42 @@ def main():
     for b in raw_blocks:
         result = qualifies(b, now, horizon)
         if result:
+            clipped_start, clipped_end = result
             new_state.append({
                 "key": block_key(b),
                 "court": b["court"],
-                "start": b["start"],
-                "end": b["end"],
+                "start": int(clipped_start.timestamp()),
+                "end": int(clipped_end.timestamp()),
             })
 
-    # Saved blocks that are still in the future but no longer free
     previous = load_state()
-    taken = [p for p in previous
-             if p["end"] > now.timestamp() and p["key"] not in current_keys]
+    previous_keys = {p["key"] for p in previous}
 
-    print(f"Saved blocks: {len(previous)}, now free: {len(new_state)}, taken: {len(taken)}")
+    # 1) Newly free: in the current state but not in the saved one
+    newly_free = sorted((b for b in new_state if b["key"] not in previous_keys),
+                        key=lambda b: (b["start"], b["court"]))
+
+    # 2) Taken: saved earlier, still in the future, but no longer free
+    taken = sorted((p for p in previous
+                    if p["end"] > now.timestamp() and p["key"] not in current_keys),
+                   key=lambda p: (p["start"], p["court"]))
+
+    print(f"Saved: {len(previous)}, now free: {len(new_state)}, "
+          f"newly free: {len(newly_free)}, taken: {len(taken)}")
+
+    if newly_free:
+        items = [(dt.datetime.fromtimestamp(b["start"], TZ),
+                  dt.datetime.fromtimestamp(b["end"], TZ),
+                  b["court"]) for b in newly_free]
+        notify("Padel slot free", "Now free:\n\n" + format_lines(items))
 
     if taken:
-        items = []
-        for p in sorted(taken, key=lambda p: (p["start"], p["court"])):
-            items.append((dt.datetime.fromtimestamp(p["start"], TZ),
-                          dt.datetime.fromtimestamp(p["end"], TZ),
-                          p["court"]))
+        items = [(dt.datetime.fromtimestamp(p["start"], TZ),
+                  dt.datetime.fromtimestamp(p["end"], TZ),
+                  p["court"]) for p in taken]
         notify("Padel slot taken", "No longer free:\n\n" + format_lines(items))
-        print("Notification sent.")
 
-    save_state(new_state)
+    save_state([{k: b[k] for k in ("key", "court", "start", "end")} for b in new_state])
 
 
 if __name__ == "__main__":
